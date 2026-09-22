@@ -49,7 +49,9 @@ import {
   UpdateTaskSchema,
   CompleteTaskSchema,
   CancelTaskSchema,
+  AssignTaskToProjectSchema,
   type CancelTaskInput,
+  type AssignTaskToProjectInput,
   AddTaskCommentSchema,
   UpdatePhaseSchema,
   ToggleFlowPhaseSchema,
@@ -1111,6 +1113,66 @@ IMPORTANTE: Confirme com o usuário antes de executar. Para verificar o status a
             `- **ID**: #${params.task_id}`,
             result?.title ? `- **Título**: ${result.title}` : "",
             `- **Status**: ${TASK_STATUS_LABELS[situation] ?? `Desconhecido (${result?.situation})`}`,
+          ].filter(Boolean).join("\n") }],
+        };
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: handleApiError(error) }] };
+      }
+    }
+  );
+
+  // -------- Assign Task to Project (migrar task existente) --------
+  server.registerTool(
+    "ekyte_assign_task_to_project",
+    {
+      title: "Vincular Tarefa Existente a um Projeto",
+      description: `Migra uma tarefa JÁ EXISTENTE (avulsa ou de outro projeto) para dentro de um projeto — funciona mesmo em tarefa já concluída ou cancelada.
+
+Diferente de ekyte_create_task (que só vincula tarefa nova ao nascer), esta tool corrige o vínculo de uma tarefa que já existe. Use quando decidir organizar retroativamente o histórico de uma frente dentro de um projeto.
+
+Passe project_id=null para desvincular (a tarefa volta a ser avulsa).
+
+⚠️ A API do Ekyte falha silenciosamente na etapa se project_id e project_phase_id forem enviados juntos numa tarefa que já tinha vínculo — por isso esta tool sempre faz DUAS chamadas (projeto, depois etapa) e confere o resultado antes de reportar.
+
+IMPORTANTE: Confirme com o usuário antes de executar, especialmente em lote.`,
+      inputSchema: AssignTaskToProjectSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (params: AssignTaskToProjectInput) => {
+      try {
+        // Desvincular o projeto sem dizer o que fazer da etapa deixaria ctcTaskProjectPhaseId
+        // órfão (apontando pra etapa de um projeto que a task não tem mais) — API confirma isso.
+        const projectPhaseId = params.project_phase_id ?? (params.project_id === null ? null : undefined);
+
+        await apiPatch(
+          companyV2Url(`ctc-tasks/${params.task_id}`),
+          [{ op: "replace", path: "/ctcTaskProjectId", value: params.project_id }]
+        );
+        if (projectPhaseId !== undefined) {
+          await apiPatch(
+            companyV2Url(`ctc-tasks/${params.task_id}`),
+            [{ op: "replace", path: "/ctcTaskProjectPhaseId", value: projectPhaseId }]
+          );
+        }
+
+        const result = await apiGet<Record<string, unknown>>(companyV2Url(`ctc-tasks/${params.task_id}`));
+        const project = result?.ctcTaskProject as Record<string, unknown> | undefined;
+        const phase = result?.ctcTaskProjectPhase as Record<string, unknown> | undefined;
+
+        return {
+          content: [{ type: "text" as const, text: [
+            params.project_id === null ? "# ✅ Tarefa Desvinculada do Projeto" : "# ✅ Tarefa Vinculada ao Projeto",
+            "",
+            `- **ID**: #${params.task_id}`,
+            result?.title ? `- **Título**: ${result.title}` : "",
+            `- **Status**: ${TASK_STATUS_LABELS[Number(result?.situation)] ?? `Desconhecido (${result?.situation})`}`,
+            `- **Projeto**: ${project ? `${project.name} (ID ${result?.ctcTaskProjectId})` : "nenhum (avulsa)"}`,
+            phase ? `- **Etapa**: ${phase.name} (ID ${result?.ctcTaskProjectPhaseId})` : "",
           ].filter(Boolean).join("\n") }],
         };
       } catch (error) {

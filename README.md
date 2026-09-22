@@ -108,6 +108,7 @@ Se preferir fazer manualmente (sem o PRD), as seções abaixo cobrem cada parte 
 |------|-----------|
 | `ekyte_create_task` | Cria nova tarefa (fase única ou **multi-fase**, com executor diferente por fase); com `project_id`/`project_phase_id` nasce **dentro de um projeto** |
 | `ekyte_cancel_task` | Marca tarefa como cancelada (situation 40) — não confundir com concluída |
+| `ekyte_assign_task_to_project` | Vincula ou desvincula uma tarefa **já existente** (mesmo concluída/cancelada) a um projeto — migração retroativa |
 | `ekyte_create_project` | Cria um projeto no workspace (frente dedicada), opcionalmente já com etapas (`phases[]`) na ordem dada |
 | `ekyte_create_project_phase` | Adiciona uma etapa a um projeto existente (por padrão no fim; `position` para escolher) |
 | `ekyte_reorder_project_phases` | Define a ordem das etapas de um projeto |
@@ -131,7 +132,7 @@ Projeto é o agrupador de tarefas de uma frente (ex.: "Calendário editorial", "
 3. `ekyte_create_task(..., project_id, project_phase_id)` — a tarefa nasce dentro do projeto
 4. `ekyte_list_project_tasks(project_id)` — conferência
 
-Tarefa criada sem `project_id` nasce avulsa; o MCP não move tarefa avulsa para projeto (só a UI).
+Tarefa criada sem `project_id` nasce avulsa. Para mover uma tarefa **já existente** (mesmo concluída/cancelada) para dentro de um projeto, use `ekyte_assign_task_to_project(task_id, project_id, project_phase_id?)` — não precisa da UI. A API falha silenciosamente na etapa se `project_id`+`project_phase_id` forem enviados juntos numa tarefa que já tinha vínculo, então a tool sempre manda em duas chamadas separadas.
 
 ## Fluxo recomendado para criar uma tarefa
 

@@ -250,6 +250,18 @@ export const CancelTaskSchema = z.object({
 
 export type CancelTaskInput = z.infer<typeof CancelTaskSchema>;
 
+// ============ Assign Task to Project (migrar task existente) ============
+
+export const AssignTaskToProjectSchema = z.object({
+  task_id: TaskIdSchema,
+  project_id: z.number().int().positive().nullable()
+    .describe("ID do projeto a vincular (use ekyte_list_projects). Passe null para DESVINCULAR a task do projeto (volta a ser avulsa)."),
+  project_phase_id: z.number().int().positive().nullable().optional()
+    .describe("ID da etapa do projeto (use ekyte_list_project_phases). Opcional; passe null para limpar só a etapa mantendo o projeto. Se project_id vier null e este campo for omitido, a etapa é limpa junto automaticamente (evita ficar órfã)."),
+}).strict();
+
+export type AssignTaskToProjectInput = z.infer<typeof AssignTaskToProjectSchema>;
+
 // ============ Add Comment to Task ============
 
 export const AddTaskCommentSchema = z.object({

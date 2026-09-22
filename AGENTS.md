@@ -25,6 +25,7 @@ Este e o servidor MCP (Model Context Protocol) do Ekyte, uma plataforma de gesta
 |------|-----------|----------------------|
 | `ekyte_create_task` | Cria tarefa (fase unica ou multi-fase); `project_id`/`project_phase_id` a colocam dentro de um projeto | Sim |
 | `ekyte_cancel_task` | Marca tarefa como cancelada (situation 40) | Sim (irreversivel) |
+| `ekyte_assign_task_to_project` | Vincula/desvincula tarefa JA EXISTENTE a um projeto (mesmo concluida/cancelada) | Sim, principalmente em lote |
 | `ekyte_create_project` | Cria projeto (frente) no workspace, opcionalmente ja com etapas (`phases[]`) | Sim (visivel ao time) |
 | `ekyte_create_project_phase` | Adiciona etapa a um projeto existente (por padrao no fim; `position` para escolher) | Nao |
 | `ekyte_reorder_project_phases` | Define a ordem das etapas do projeto | Nao |
@@ -59,7 +60,7 @@ Projeto = agrupador de tarefas dentro do workspace (ex: "Calendario editorial", 
 3. `ekyte_create_task(..., project_id=..., project_phase_id=...)` → tarefa nasce dentro do projeto
 4. `ekyte_list_project_tasks(project_id)` para conferir
 
-Tarefa criada sem `project_id` nasce AVULSA e nao pode ser movida para um projeto pelo MCP (so pela UI).
+Tarefa criada sem `project_id` nasce AVULSA. Para mover uma tarefa JA EXISTENTE (inclusive concluida/cancelada) para dentro de um projeto, use `ekyte_assign_task_to_project(task_id, project_id, project_phase_id?)` — funciona via API mesmo sem passar pela UI. `project_id: null` desvincula (limpa a etapa junto automaticamente).
 
 ## Fluxo: Apontar Horas
 
