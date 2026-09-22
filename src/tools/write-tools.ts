@@ -13,6 +13,7 @@ import {
   apiPost,
   apiPatch,
   apiPut,
+  apiDelete,
   apiGet,
   companyUrl,
   companyV2Url,
@@ -29,11 +30,26 @@ import {
   type ListTimeEntriesInput,
   type DeleteTimeEntryInput,
 } from "../schemas/time-entry.js";
-import { CreateProjectSchema, type CreateProjectInput } from "../schemas/project.js";
+import {
+  CreateProjectSchema,
+  CreateProjectPhaseSchema,
+  ReorderProjectPhasesSchema,
+  DeleteProjectPhaseSchema,
+  ArchiveProjectSchema,
+  DeleteProjectSchema,
+  type CreateProjectInput,
+  type CreateProjectPhaseInput,
+  type ReorderProjectPhasesInput,
+  type DeleteProjectPhaseInput,
+  type ArchiveProjectInput,
+  type DeleteProjectInput,
+} from "../schemas/project.js";
 import {
   CreateTaskSchema,
   UpdateTaskSchema,
   CompleteTaskSchema,
+  CancelTaskSchema,
+  type CancelTaskInput,
   AddTaskCommentSchema,
   UpdatePhaseSchema,
   ToggleFlowPhaseSchema,
@@ -478,7 +494,8 @@ Fluxo recomendado ANTES:
 2. ekyte_list_task_types → task_type_id (+ workflow_id)
 3. ekyte_list_phases(workflow_id) → phase_ids disponíveis
 4. ekyte_list_users → executor_id (UUID)
-5. Chamar este tool
+5. (opcional) ekyte_list_projects(workspace_id) → project_id · ekyte_list_project_phases(project_id) → project_phase_id, para a tarefa nascer DENTRO de um projeto do workspace em vez de avulsa
+6. Chamar este tool
 
 IMPORTANTE: Sempre confirme TODOS os dados com o usuário antes de criar.`,
       inputSchema: CreateTaskSchema,
@@ -599,6 +616,19 @@ IMPORTANTE: Sempre confirme TODOS os dados com o usuário antes de criar.`,
 
         if (params.priority !== undefined) payload.priority = params.priority;
 
+        // Vínculo com projeto do workspace (task de projeto em vez de avulsa)
+        if (params.project_phase_id !== undefined && params.project_id === undefined) {
+          return { content: [{ type: "text" as const, text: "Erro: 'project_phase_id' exige 'project_id'." }] };
+        }
+        if (params.project_id !== undefined) {
+          payload.ctcTaskProjectId = params.project_id;
+          payload.ctcTaskProject = { id: params.project_id };
+          if (params.project_phase_id !== undefined) {
+            payload.ctcTaskProjectPhaseId = params.project_phase_id;
+            payload.ctcTaskProjectPhase = { id: params.project_phase_id };
+          }
+        }
+
         const result = await apiPost<Record<string, unknown> | number>(
           companyUrl("ctc-tasks"),
           payload
@@ -618,6 +648,9 @@ IMPORTANTE: Sempre confirme TODOS os dados com o usuário antes de criar.`,
           `- **Tempo Estimado Total**: ${totalFmt.formatted}`,
           `- **Início**: ${params.phase_start_date}`,
           `- **Entrega**: ${params.phase_due_date}`,
+          params.project_id !== undefined
+            ? `- **Projeto**: ID ${params.project_id}${params.project_phase_id !== undefined ? ` · Etapa ID ${params.project_phase_id}` : ""}`
+            : "",
           "",
           `### Fluxo (${flow.length} fase${flow.length > 1 ? "s" : ""}):`,
           ...flow.map((f, i) =>
@@ -1046,6 +1079,46 @@ Para verificar o status atual da tarefa, use ekyte_get_task primeiro.`,
     }
   );
 
+  // -------- Cancel Task --------
+  server.registerTool(
+    "ekyte_cancel_task",
+    {
+      title: "Cancelar Tarefa",
+      description: `Marca uma tarefa como CANCELADA (situation=40) no Ekyte.
+
+Use quando a demanda deixou de existir ou foi absorvida por outra tarefa. Não confundir com ekyte_complete_task (concluída), que conta como entrega.
+
+IMPORTANTE: Confirme com o usuário antes de executar. Para verificar o status atual, use ekyte_get_task primeiro.`,
+      inputSchema: CancelTaskSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (params: CancelTaskInput) => {
+      try {
+        const result = await apiPatch<Record<string, unknown>>(
+          companyV2Url(`ctc-tasks/${params.task_id}`),
+          [{ op: "replace", path: "/situation", value: 40 }]
+        );
+        const situation = Number(result?.situation);
+        return {
+          content: [{ type: "text" as const, text: [
+            situation === 40 ? "# ✅ Tarefa Cancelada" : "# ⚠️ Resposta inesperada ao cancelar",
+            "",
+            `- **ID**: #${params.task_id}`,
+            result?.title ? `- **Título**: ${result.title}` : "",
+            `- **Status**: ${TASK_STATUS_LABELS[situation] ?? `Desconhecido (${result?.situation})`}`,
+          ].filter(Boolean).join("\n") }],
+        };
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: handleApiError(error) }] };
+      }
+    }
+  );
+
   // -------- Add Comment to Task --------
   server.registerTool(
     "ekyte_add_task_comment",
@@ -1097,7 +1170,14 @@ O comentário será adicionado como uma nova mensagem na timeline da tarefa, vis
     "ekyte_create_project",
     {
       title: "Criar Projeto no Ekyte",
-      description: `Cria um novo projeto no Ekyte baseado nos parâmetros e num payload adicional dinâmico.`,
+      description: `Cria um novo PROJETO dentro de um workspace (cliente) do Ekyte — um agrupador para uma frente de trabalho (ex: "Calendário editorial", "Site + CRM", "Estruturação Estratégica").
+
+A API exige nome, alias (identificação curta), workspace e data de início; o tool preenche alias e data de início se você omitir.
+Passe phases[] para já criar as ETAPAS do projeto (ex: ['Planejamento','Produção','Publicação']) — cada etapa vira um project_phase_id, usado em ekyte_create_task para agrupar tarefas.
+
+Depois: ekyte_create_task(project_id, project_phase_id?) cria tarefas dentro do projeto; ekyte_list_project_tasks lista o que já está lá.
+
+IMPORTANTE: projeto é visível para todo o time do workspace — confirme nome, workspace e etapas com o usuário antes de criar.`,
       inputSchema: CreateProjectSchema,
       annotations: {
         readOnlyHint: false,
@@ -1109,44 +1189,311 @@ O comentário será adicionado como uma nova mensagem na timeline da tarefa, vis
     async (params: CreateProjectInput) => {
       try {
         const endpoint = params.endpoint_override || "projects";
-        
-        // Base payload
+        const today = new Date().toISOString().slice(0, 10);
+
         const payload: Record<string, unknown> = {
           name: params.name,
+          alias: params.alias ?? slugAlias(params.name),
           workspaceId: params.workspaceId,
+          workspace: { id: params.workspaceId },
+          startDate: params.startDate ?? today,
+          description: params.description ? `<div>${params.description}</div>` : "",
         };
 
         if (params.templateId) payload.templateId = params.templateId;
-        if (params.startDate) payload.startDate = params.startDate;
         if (params.endDate) payload.endDate = params.endDate;
 
-        // Merge any additional fields passed by the user (reverse engineered from DevTools)
         if (params.additional_payload) {
           Object.assign(payload, params.additional_payload);
         }
 
-        const data = await apiPost<Record<string, unknown>>(companyUrl(endpoint), payload);
-        const newId = data?.id ?? "desconhecido";
+        // A API devolve só o id numérico do projeto criado
+        const result = await apiPost<Record<string, unknown> | number>(companyV2Url(endpoint), payload);
+        const projectId = typeof result === "number"
+          ? result
+          : Number((result as Record<string, unknown>)?.id);
+
+        if (!Number.isFinite(projectId)) {
+          return { content: [{ type: "text" as const, text: `Projeto criado, mas a API não devolveu um ID reconhecível: ${JSON.stringify(result)}` }] };
+        }
+
+        // Etapas do projeto, na ordem informada. A API não respeita o `sequential` do POST
+        // (a etapa nova sempre entra na frente), então cria todas e reordena no fim.
+        const createdPhases: Array<{ id: number; name: string; sequential: number }> = [];
+        const phaseErrors: string[] = [];
+        for (const [i, name] of (params.phases ?? []).entries()) {
+          try {
+            const id = await createProjectPhase(projectId, name);
+            createdPhases.push({ id, name, sequential: i + 1 });
+          } catch (error) {
+            phaseErrors.push(`${i + 1}. ${name}: ${handleApiError(error)}`);
+          }
+        }
+        if (createdPhases.length > 1) {
+          try {
+            await reorderProjectPhases(projectId, createdPhases.map((p) => p.id));
+          } catch (error) {
+            phaseErrors.push(`Reordenação: ${handleApiError(error)} — use ekyte_reorder_project_phases.`);
+          }
+        }
 
         const markdown = [
-          `# Projeto Criado com Sucesso!`,
+          "# ✅ Projeto Criado com Sucesso!",
           "",
-          `- **ID**: ${newId}`,
+          `- **ID**: ${projectId}`,
           `- **Nome**: ${params.name}`,
-          `- **Workspace**: ${params.workspaceId}`,
-        ].join("\n");
+          `- **Alias**: ${payload.alias}`,
+          `- **Workspace**: ID ${params.workspaceId}`,
+          `- **Início**: ${payload.startDate}`,
+          params.endDate ? `- **Fim**: ${params.endDate}` : "",
+          createdPhases.length > 0 ? "" : "",
+          createdPhases.length > 0 ? `### Etapas (${createdPhases.length}):` : "",
+          ...createdPhases.map((p) => `${p.sequential}. ${p.name} → project_phase_id **${p.id}**`),
+          phaseErrors.length > 0 ? "" : "",
+          phaseErrors.length > 0 ? "### ⚠️ Etapas que falharam:" : "",
+          ...phaseErrors,
+          "",
+          "Próximo passo: ekyte_create_task(project_id=" + projectId + (createdPhases.length > 0 ? ", project_phase_id=<etapa>" : "") + ", ...)",
+        ].filter((line, i, arr) => line !== "" || arr[i - 1] !== "").join("\n");
+
+        const data = { id: projectId, name: params.name, alias: payload.alias, workspace_id: params.workspaceId, start_date: payload.startDate, phases: createdPhases, phase_errors: phaseErrors };
 
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: formatResponse(data, markdown, ResponseFormat.MARKDOWN),
-            },
-          ],
+          content: [{ type: "text" as const, text: formatResponse(data, markdown, ResponseFormat.MARKDOWN) }],
         };
       } catch (error) {
         return { content: [{ type: "text" as const, text: handleApiError(error) }] };
       }
     }
   );
+
+  // -------- Create Project Phase --------
+  server.registerTool(
+    "ekyte_create_project_phase",
+    {
+      title: "Criar Etapa em um Projeto",
+      description: `Adiciona uma ETAPA a um projeto existente do Ekyte (ex: "Semana 3", "Publicação"), por padrão na última posição.
+
+Etapas de projeto são agrupadores de tarefas dentro do projeto — diferentes das fases do workflow (phase_id) que definem quem executa cada passo da tarefa.
+O id devolvido é o project_phase_id a usar em ekyte_create_task.
+
+Use ekyte_list_project_phases antes para ver as etapas já existentes e evitar duplicata.`,
+      inputSchema: CreateProjectPhaseSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async (params: CreateProjectPhaseInput) => {
+      try {
+        const id = await createProjectPhase(params.project_id, params.name);
+
+        // A etapa nova entra na frente; reposiciona para a posição pedida (padrão: última)
+        const others = (await getProjectPhases(params.project_id))
+          .map((p) => Number(p.id))
+          .filter((pid) => pid !== id);
+        const position = Math.min(params.position ?? others.length + 1, others.length + 1);
+        const ordered = [...others.slice(0, position - 1), id, ...others.slice(position - 1)];
+        await reorderProjectPhases(params.project_id, ordered);
+
+        return {
+          content: [{ type: "text" as const, text: [
+            "# ✅ Etapa Criada com Sucesso!",
+            "",
+            `- **project_phase_id**: ${id}`,
+            `- **Nome**: ${params.name}`,
+            `- **Posição**: ${position} de ${ordered.length}`,
+            `- **Projeto**: ID ${params.project_id}`,
+          ].join("\n") }],
+        };
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: handleApiError(error) }] };
+      }
+    }
+  );
+
+  // -------- Reorder Project Phases --------
+  server.registerTool(
+    "ekyte_reorder_project_phases",
+    {
+      title: "Reordenar Etapas de um Projeto",
+      description: `Define a ordem das ETAPAS de um projeto (equivale a arrastar em "Editar fases" na UI).
+
+Passe phase_ids na ordem desejada (use ekyte_list_project_phases para ver os IDs). Etapas não listadas ficam depois, na ordem atual.`,
+      inputSchema: ReorderProjectPhasesSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (params: ReorderProjectPhasesInput) => {
+      try {
+        const current = await getProjectPhases(params.project_id);
+        const known = new Set(current.map((p) => Number(p.id)));
+        const unknown = params.phase_ids.filter((id) => !known.has(id));
+        if (unknown.length > 0) {
+          return { content: [{ type: "text" as const, text: `Erro: etapa(s) ${unknown.join(", ")} não pertencem ao projeto #${params.project_id}. Use ekyte_list_project_phases.` }] };
+        }
+        const wanted = new Set(params.phase_ids);
+        const ordered = [...params.phase_ids, ...current.map((p) => Number(p.id)).filter((id) => !wanted.has(id))];
+        await reorderProjectPhases(params.project_id, ordered);
+
+        const after = await getProjectPhases(params.project_id);
+        return {
+          content: [{ type: "text" as const, text: [
+            `# ✅ Etapas do Projeto #${params.project_id} Reordenadas`,
+            "",
+            ...after.map((p) => `${p.sequential}. ${p.name} (ID ${p.id})`),
+          ].join("\n") }],
+        };
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: handleApiError(error) }] };
+      }
+    }
+  );
+
+  // -------- Delete Project Phase --------
+  server.registerTool(
+    "ekyte_delete_project_phase",
+    {
+      title: "Excluir Etapa de um Projeto",
+      description: `Remove uma ETAPA de um projeto. As tarefas já vinculadas à etapa continuam no projeto, sem etapa.
+
+IMPORTANTE: Não pode ser desfeito. Confirme com o usuário antes de executar.`,
+      inputSchema: DeleteProjectPhaseSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (params: DeleteProjectPhaseInput) => {
+      try {
+        const phase = (await getProjectPhases(params.project_id)).find((p) => Number(p.id) === params.phase_id);
+        if (!phase) {
+          return { content: [{ type: "text" as const, text: `Etapa ${params.phase_id} não encontrada no projeto #${params.project_id}.` }] };
+        }
+        // A API exige o objeto completo da etapa no corpo do DELETE, com id como string
+        await apiDelete(companyUrl(`projects/${params.project_id}/phases`), [{ ...phase, id: String(phase.id) }]);
+        // A API não renumera as etapas restantes; fecha o buraco na sequência
+        const remaining = (await getProjectPhases(params.project_id)).map((p) => Number(p.id));
+        if (remaining.length > 0) await reorderProjectPhases(params.project_id, remaining);
+        return {
+          content: [{ type: "text" as const, text: `# ✅ Etapa Excluída\n\n- **ID**: ${params.phase_id}\n- **Nome**: ${phase.name}\n- **Projeto**: ID ${params.project_id}` }],
+        };
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: handleApiError(error) }] };
+      }
+    }
+  );
+
+  // -------- Archive Project --------
+  server.registerTool(
+    "ekyte_archive_project",
+    {
+      title: "Arquivar Projeto",
+      description: `Arquiva um projeto (some das listagens ativas; tarefas já geradas continuam existindo).
+
+É o caminho para encerrar uma frente ou desfazer um projeto que já gerou tarefas — esses não podem ser excluídos.
+
+IMPORTANTE: Confirme com o usuário antes de executar.`,
+      inputSchema: ArchiveProjectSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (params: ArchiveProjectInput) => {
+      try {
+        await apiPatch(companyV2Url(`projects/${params.project_id}`), [{ op: "replace", path: "/active", value: 2 }]);
+        return { content: [{ type: "text" as const, text: `# ✅ Projeto #${params.project_id} Arquivado` }] };
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: handleApiError(error) }] };
+      }
+    }
+  );
+
+  // -------- Delete Project --------
+  server.registerTool(
+    "ekyte_delete_project",
+    {
+      title: "Excluir Projeto",
+      description: `Exclui permanentemente um projeto. A API só permite se o projeto NUNCA gerou tarefas — caso contrário devolve erro e o caminho é ekyte_archive_project.
+
+IMPORTANTE: Não pode ser desfeito. Confirme com o usuário antes de executar.`,
+      inputSchema: DeleteProjectSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async (params: DeleteProjectInput) => {
+      try {
+        // A API exige o objeto completo do projeto no corpo do DELETE
+        const project = await apiGet<Record<string, unknown>>(companyV2Url(`projects/${params.project_id}`));
+        await apiDelete(companyV2Url("projects"), [project]);
+        return { content: [{ type: "text" as const, text: `# ✅ Projeto #${params.project_id} Excluído\n\n- **Nome**: ${project?.name ?? "-"}` }] };
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: handleApiError(error) }] };
+      }
+    }
+  );
+}
+
+/** Alias do projeto: a API exige uma identificação curta (≤14 chars); derivada do nome quando não informada. */
+function slugAlias(name: string): string {
+  const slug = name
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return (slug || "projeto").slice(0, 14).replace(/-+$/g, "");
+}
+
+type ProjectPhase = Record<string, unknown> & { id: number | string; name: string; sequential: number };
+
+/** GET /projects/{id}/phases — etapas do projeto em ordem. */
+async function getProjectPhases(projectId: number): Promise<ProjectPhase[]> {
+  const res = await apiGet<ProjectPhase[]>(companyUrl(`projects/${projectId}/phases`));
+  return (Array.isArray(res) ? res : []).slice().sort((a, b) => (Number(a.sequential) || 0) - (Number(b.sequential) || 0));
+}
+
+/** POST /projects/{id}/phases — devolve o id da etapa criada (a API responde { ctcTaskProjectPhaseId, ctcTaskProjectPhases[] }). */
+async function createProjectPhase(projectId: number, name: string): Promise<number> {
+  const res = await apiPost<Record<string, unknown> | number>(
+    companyUrl(`projects/${projectId}/phases`),
+    { name, sequential: 0, ctcTaskProjectId: projectId }
+  );
+  if (typeof res === "number") return res;
+  const direct = (res as Record<string, unknown>)?.ctcTaskProjectPhaseId ?? (res as Record<string, unknown>)?.id;
+  if (direct !== undefined && direct !== null) return Number(direct);
+  const list = (res as Record<string, unknown>)?.ctcTaskProjectPhases as ProjectPhase[] | undefined;
+  const match = list?.find((p) => p.name === name);
+  if (!match) throw new Error(`Etapa "${name}" criada, mas a API não devolveu o id.`);
+  return Number(match.id);
+}
+
+/**
+ * PUT /projects/{id}/phases/sequentials — a API exige o objeto completo de cada etapa (como veio no GET),
+ * com `id` como string e `sequential` 1-based na nova ordem.
+ */
+async function reorderProjectPhases(projectId: number, orderedIds: number[]): Promise<void> {
+  const current = await getProjectPhases(projectId);
+  const byId = new Map(current.map((p) => [Number(p.id), p]));
+  const rest = current.map((p) => Number(p.id)).filter((id) => !orderedIds.includes(id));
+  const body = [...orderedIds, ...rest]
+    .map((id) => byId.get(id))
+    .filter((p): p is ProjectPhase => p !== undefined)
+    .map((p, i) => ({ ...p, id: String(p.id), sequential: i + 1 }));
+  await apiPut(companyUrl(`projects/${projectId}/phases/sequentials`), body);
 }

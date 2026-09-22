@@ -96,7 +96,9 @@ export interface EkyteTask {
   tags: unknown[];
   artifacts: unknown[];
   ctcTaskProjectId: number | null;
-  ctcTaskProject: unknown | null;
+  ctcTaskProject: { id: number; name: string; alias?: string } | null;
+  ctcTaskProjectPhaseId: number | null;
+  ctcTaskProjectPhase: { id: number; name: string; sequential?: number } | null;
 }
 
 export interface EkyteTimeTracking {

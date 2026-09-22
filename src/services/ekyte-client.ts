@@ -145,9 +145,11 @@ export async function apiPatch<T>(
 }
 
 export async function apiDelete<T>(
-  endpoint: string
+  endpoint: string,
+  data?: unknown
 ): Promise<T> {
-  const response = await getClient().delete<T>(endpoint);
+  // Alguns endpoints do Ekyte (etapas/projetos) exigem o objeto a remover no corpo do DELETE
+  const response = await getClient().delete<T>(endpoint, data === undefined ? undefined : { data });
   return response.data;
 }
 

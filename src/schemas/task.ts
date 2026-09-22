@@ -111,6 +111,10 @@ export const CreateTaskSchema = z.object({
     .describe("Prioridade (0-1000). Ex: 100=Baixa, 300=Média, 500=Alta. Opcional."),
   phases: z.array(TaskPhaseFlowItemSchema).min(1).optional()
     .describe("MULTI-FASE: lista de fases com executores distintos. Quando fornecido, executor_id/phase_id de cima são IGNORADOS — a tarefa começa na primeira fase da lista. Use para criar tarefas com pessoas diferentes em cada etapa do fluxo."),
+  project_id: z.number().int().positive().optional()
+    .describe("ID do PROJETO do workspace ao qual a tarefa pertence (use ekyte_list_projects). Sem isso a tarefa nasce avulsa."),
+  project_phase_id: z.number().int().positive().optional()
+    .describe("ID da ETAPA do projeto (use ekyte_list_project_phases). Exige project_id. Não confundir com phase_id (fase do workflow)."),
 }).strict();
 
 export type CreateTaskInput = z.infer<typeof CreateTaskSchema>;
@@ -237,6 +241,14 @@ export const CompleteTaskSchema = z.object({
 }).strict();
 
 export type CompleteTaskInput = z.infer<typeof CompleteTaskSchema>;
+
+// ============ Cancel Task ============
+
+export const CancelTaskSchema = z.object({
+  task_id: TaskIdSchema,
+}).strict();
+
+export type CancelTaskInput = z.infer<typeof CancelTaskSchema>;
 
 // ============ Add Comment to Task ============
 

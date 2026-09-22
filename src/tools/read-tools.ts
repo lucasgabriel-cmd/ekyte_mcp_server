@@ -30,6 +30,8 @@ import {
   ListProjectsSchema,
   ListProjectTemplatesSchema,
   ListProjectTasksSchema,
+  ListProjectPhasesSchema,
+  type ListProjectPhasesInput,
   type ListProjectsInput,
   type ListProjectTemplatesInput,
   type ListProjectTasksInput,
@@ -488,6 +490,8 @@ Retorna: id, título, status, responsável, datas, tempo estimado/real, workspac
             phase_due_date: t.phaseDueDate?.split("T")[0] ?? "-",
             current_due_date: t.currentDueDate?.split("T")[0] ?? "-",
             created_at: t.creationDate?.split("T")[0] ?? "-",
+            project_id: t.ctcTaskProjectId ?? null,
+            project: t.ctcTaskProject?.name ?? null,
           })),
           has_more: hasMore,
           next_page: nextPage,
@@ -678,6 +682,10 @@ Retorna: título, descrição, status, responsável, workspace, tipo, datas, tem
           resolved_at: task.resolvedDate?.split("T")[0] ?? null,
           created_by: task.createBy?.userName,
           priority: task.priority,
+          project_id: task.ctcTaskProjectId ?? null,
+          project: task.ctcTaskProject?.name ?? null,
+          project_phase_id: task.ctcTaskProjectPhaseId ?? null,
+          project_phase: task.ctcTaskProjectPhase?.name ?? null,
         };
 
         const markdown = [
@@ -691,6 +699,9 @@ Retorna: título, descrição, status, responsável, workspace, tipo, datas, tem
           `- **Phase ID**: ${output.phase_id}`,
           `- **Responsável**: ${output.executor}`,
           `- **Criado por**: ${output.created_by ?? "-"}`,
+          output.project_id
+            ? `- **Projeto**: ${output.project ?? "-"} (ID: ${output.project_id})${output.project_phase_id ? ` · Etapa: ${output.project_phase ?? "-"} (ID: ${output.project_phase_id})` : ""}`
+            : "- **Projeto**: nenhum (tarefa avulsa)",
           "",
           "### Datas",
           `- Início etapa: ${output.phase_start_date}`,
@@ -845,6 +856,59 @@ Você pode sobrescrever o endpoint caso a API utilize um caminho diferente de 'p
           ...output.items.map((p) => `| ${p.id} | ${p.name} | ${p.description} |`),
           "",
           hasMore ? `➡️ Mais resultados na página ${nextPage}` : "✅ Fim dos resultados.",
+        ].join("\n");
+
+        return { content: [{ type: "text" as const, text: formatResponse(output, markdown, params.response_format) }] };
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: handleApiError(error) }] };
+      }
+    }
+  );
+
+  // -------- List Project Phases --------
+  server.registerTool(
+    "ekyte_list_project_phases",
+    {
+      title: "Listar Etapas de um Projeto",
+      description: `Lista as ETAPAS internas de um projeto do Ekyte (agrupadores de tarefas dentro do projeto, ex: "Semana 1", "Dia dos Namorados").
+
+Retorna id (= project_phase_id para ekyte_create_task), nome e posição.
+Não confundir com ekyte_list_phases, que lista as fases do WORKFLOW (quem executa cada passo da tarefa).`,
+      inputSchema: ListProjectPhasesSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (params: ListProjectPhasesInput) => {
+      try {
+        const data = await apiGet<Array<Record<string, unknown>>>(companyUrl(`projects/${params.project_id}/phases`));
+        const all = (Array.isArray(data) ? data : []).slice().sort((a, b) => (Number(a.sequential) || 0) - (Number(b.sequential) || 0));
+
+        if (all.length === 0) {
+          return { content: [{ type: "text" as const, text: `O projeto #${params.project_id} não tem etapas. Use ekyte_create_project_phase para criar.` }] };
+        }
+
+        const output = {
+          project_id: params.project_id,
+          project_name: (all[0].ctcTaskProject as Record<string, unknown> | undefined)?.name ?? null,
+          total: all.length,
+          items: all.map((p) => ({
+            id: p.id,
+            name: p.name,
+            sequential: p.sequential,
+            created_at: typeof p.createdAt === "string" ? p.createdAt.split("T")[0] : null,
+          })),
+        };
+
+        const markdown = [
+          `# Etapas do Projeto #${params.project_id}${output.project_name ? ` — ${output.project_name}` : ""}`,
+          "",
+          "| project_phase_id | Posição | Nome |",
+          "|------------------|---------|------|",
+          ...output.items.map((p) => `| ${p.id} | ${p.sequential} | ${p.name} |`),
         ].join("\n");
 
         return { content: [{ type: "text" as const, text: formatResponse(output, markdown, params.response_format) }] };

@@ -15,11 +15,22 @@ Este e o servidor MCP (Model Context Protocol) do Ekyte, uma plataforma de gesta
 | `ekyte_get_task` | Detalhes de uma tarefa | `task_id` obrigatorio |
 | `ekyte_list_task_flow_phases` | Fases reais de uma tarefa com executores | `task_id` obrigatorio |
 | `ekyte_list_time_entries` | Apontamentos de horas | `workspace_id` + `date_from`/`date_to` |
+| `ekyte_list_projects` | Projetos (frentes) de um workspace | `workspace_id` |
+| `ekyte_list_project_phases` | Etapas internas de um projeto (`project_phase_id`) | `project_id` |
+| `ekyte_list_project_tasks` | Tarefas de um projeto | `project_id` |
+| `ekyte_list_project_templates` | Modelos de projeto da empresa | `search` |
 
 ### Escrita
 | Tool | Descricao | Confirmar com usuario? |
 |------|-----------|----------------------|
-| `ekyte_create_task` | Cria tarefa (fase unica ou multi-fase) | Sim |
+| `ekyte_create_task` | Cria tarefa (fase unica ou multi-fase); `project_id`/`project_phase_id` a colocam dentro de um projeto | Sim |
+| `ekyte_cancel_task` | Marca tarefa como cancelada (situation 40) | Sim (irreversivel) |
+| `ekyte_create_project` | Cria projeto (frente) no workspace, opcionalmente ja com etapas (`phases[]`) | Sim (visivel ao time) |
+| `ekyte_create_project_phase` | Adiciona etapa a um projeto existente (por padrao no fim; `position` para escolher) | Nao |
+| `ekyte_reorder_project_phases` | Define a ordem das etapas do projeto | Nao |
+| `ekyte_delete_project_phase` | Remove uma etapa do projeto | Sim (irreversivel) |
+| `ekyte_archive_project` | Arquiva um projeto (caminho para projeto que ja gerou tarefas) | Sim |
+| `ekyte_delete_project` | Exclui projeto que nunca gerou tarefas | Sim (irreversivel) |
 | `ekyte_update_task` | Atualiza campos da tarefa (fase atual) | Nao |
 | `ekyte_update_phase` | Atualiza fase especifica de uma tarefa | Nao |
 | `ekyte_complete_task` | Marca tarefa como concluida | Sim (irreversivel) |
@@ -38,6 +49,17 @@ Sempre siga esta ordem:
 4. `ekyte_list_users(search="...")` → obter executor_id (UUID)
 5. **Confirmar todos os dados com o usuario**
 6. `ekyte_create_task(title, workspace_id, task_type_id, executor_id, phase_id, phase_start_date, phase_due_date)`
+
+## Fluxo: Projeto dedicado a uma frente do cliente
+
+Projeto = agrupador de tarefas dentro do workspace (ex: "Calendario editorial", "Site + CRM"). Etapa de projeto (`project_phase_id`) = secao dentro do projeto (ex: "Semana 1"). Nao confundir com fase do workflow (`phase_id`), que define quem executa cada passo da tarefa.
+
+1. `ekyte_list_projects(workspace_id=...)` → verificar se a frente ja tem projeto
+2. `ekyte_create_project(name, workspaceId, phases=["Etapa A","Etapa B"])` → project_id + project_phase_ids
+3. `ekyte_create_task(..., project_id=..., project_phase_id=...)` → tarefa nasce dentro do projeto
+4. `ekyte_list_project_tasks(project_id)` para conferir
+
+Tarefa criada sem `project_id` nasce AVULSA e nao pode ser movida para um projeto pelo MCP (so pela UI).
 
 ## Fluxo: Apontar Horas
 

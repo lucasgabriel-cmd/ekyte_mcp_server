@@ -97,12 +97,23 @@ Se preferir fazer manualmente (sem o PRD), as seções abaixo cobrem cada parte 
 | `ekyte_list_task_flow_phases` | Lista as fases de uma tarefa específica, com executor/datas/esforço POR FASE |
 | `ekyte_get_task` | Detalhes de uma tarefa específica |
 | `ekyte_list_time_entries` | Lista apontamentos de horas |
+| `ekyte_list_projects` | Lista projetos (frentes de trabalho) — filtre por `workspace_id` |
+| `ekyte_list_project_phases` | Lista as etapas internas de um projeto (para descobrir `project_phase_id`) |
+| `ekyte_list_project_tasks` | Lista as tarefas de um projeto |
+| `ekyte_list_project_templates` | Lista modelos de projeto da empresa |
 
 ### Escrita (destrutivo — pede confirmação)
 
 | Tool | Descrição |
 |------|-----------|
-| `ekyte_create_task` | Cria nova tarefa (fase única ou **multi-fase**, com executor diferente por fase) |
+| `ekyte_create_task` | Cria nova tarefa (fase única ou **multi-fase**, com executor diferente por fase); com `project_id`/`project_phase_id` nasce **dentro de um projeto** |
+| `ekyte_cancel_task` | Marca tarefa como cancelada (situation 40) — não confundir com concluída |
+| `ekyte_create_project` | Cria um projeto no workspace (frente dedicada), opcionalmente já com etapas (`phases[]`) na ordem dada |
+| `ekyte_create_project_phase` | Adiciona uma etapa a um projeto existente (por padrão no fim; `position` para escolher) |
+| `ekyte_reorder_project_phases` | Define a ordem das etapas de um projeto |
+| `ekyte_delete_project_phase` | Remove uma etapa de um projeto |
+| `ekyte_archive_project` | Arquiva um projeto (único caminho para projeto que já gerou tarefas) |
+| `ekyte_delete_project` | Exclui um projeto que nunca gerou tarefas |
 | `ekyte_update_task` | Edita campos top-level da tarefa (título, descrição, executor/fase atuais, prioridade) |
 | `ekyte_update_phase` | Edita uma FASE específica da tarefa (executor, esforço, datas) — sem alterar as outras fases |
 | `ekyte_complete_task` | Marca tarefa como concluída |
@@ -110,6 +121,17 @@ Se preferir fazer manualmente (sem o PRD), as seções abaixo cobrem cada parte 
 | `ekyte_create_time_entry_with_task` | Aponta horas em tarefa específica |
 | `ekyte_create_time_entry_without_task` | Aponta horas avulso |
 | `ekyte_delete_time_entry` | Remove apontamento |
+
+## Projetos: uma frente do cliente = um projeto no workspace
+
+Projeto é o agrupador de tarefas de uma frente (ex.: "Calendário editorial", "Site + CRM"). Dentro dele, **etapas de projeto** (`project_phase_id`) separam blocos como "Semana 1" ou "Produção". Não confundir com as fases do **workflow** (`phase_id`), que dizem quem executa cada passo da tarefa.
+
+1. `ekyte_list_projects(workspace_id)` — a frente já tem projeto?
+2. `ekyte_create_project(name, workspaceId, phases: ["Planejamento", "Produção"])` — devolve `project_id` e um `project_phase_id` por etapa
+3. `ekyte_create_task(..., project_id, project_phase_id)` — a tarefa nasce dentro do projeto
+4. `ekyte_list_project_tasks(project_id)` — conferência
+
+Tarefa criada sem `project_id` nasce avulsa; o MCP não move tarefa avulsa para projeto (só a UI).
 
 ## Fluxo recomendado para criar uma tarefa
 
