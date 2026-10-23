@@ -96,13 +96,16 @@ Se preferir fazer manualmente (sem o PRD), as seções abaixo cobrem cada parte 
 | `ekyte_list_tasks` | Lista tarefas com filtros (workspace, status, datas, etc.) |
 | `ekyte_list_task_flow_phases` | Lista as fases de uma tarefa específica, com executor/datas/esforço POR FASE |
 | `ekyte_get_task` | Detalhes de uma tarefa específica |
+| `ekyte_get_detailed_task` | Tarefa completa: fluxo por fase, comentários (autor, data, anexos), anexos da descrição, período de veiculação e quantidade |
+| `ekyte_get_task_type_flow` | Etapas de um tipo de tarefa (ativas, ordem, esforço e executor padrão) — base para montar o `phases[]` |
+| `ekyte_get_current_user` | Usuário dono do token (em nome de quem as escritas saem) |
 | `ekyte_list_time_entries` | Lista apontamentos de horas |
 
 ### Escrita (destrutivo — pede confirmação)
 
 | Tool | Descrição |
 |------|-----------|
-| `ekyte_create_task` | Cria nova tarefa (fase única ou **multi-fase**, com executor diferente por fase) |
+| `ekyte_create_task` | Cria nova tarefa (fase única ou **multi-fase**, com executor diferente por fase); aceita período de veiculação e quantidade |
 | `ekyte_update_task` | Edita campos top-level da tarefa (título, descrição, executor/fase atuais, prioridade) |
 | `ekyte_update_phase` | Edita uma FASE específica da tarefa (executor, esforço, datas) — sem alterar as outras fases |
 | `ekyte_complete_task` | Marca tarefa como concluída |

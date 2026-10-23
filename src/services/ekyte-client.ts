@@ -156,3 +156,15 @@ export async function apiDelete<T>(
 export function getCompanyId(): string {
   return getConfig().companyId;
 }
+
+// ============ Helper: Token Owner ============
+
+/** Returns the user UUID (`sub` claim) of the JWT in EKYTE_BEARER_TOKEN. */
+export function getTokenUserId(): string {
+  const { bearerToken } = getConfig();
+  const payload = bearerToken.split(".")[1];
+  if (!payload) throw new Error("EKYTE_BEARER_TOKEN não parece um JWT (sem payload).");
+  const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { sub?: string };
+  if (!claims.sub) throw new Error("O JWT em EKYTE_BEARER_TOKEN não traz o claim 'sub'.");
+  return claims.sub;
+}

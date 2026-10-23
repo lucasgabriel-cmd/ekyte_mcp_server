@@ -473,10 +473,12 @@ MODO 2 — MULTI-FASE (com executores diferentes por fase):
 Forneça phases[] com uma entrada por fase. Cada entrada tem { phase_id, executor_id, effort_minutes, phase_start_date?, phase_due_date? }.
 A tarefa começa na PRIMEIRA fase da lista.
 
+Opcional nos dois modos: placement_start_date / placement_end_date (período de veiculação) e quantity (quantidade de peças), gravados nos campos próprios da tarefa.
+
 Fluxo recomendado ANTES:
 1. ekyte_list_workspaces → workspace_id
 2. ekyte_list_task_types → task_type_id (+ workflow_id)
-3. ekyte_list_phases(workflow_id) → phase_ids disponíveis
+3. ekyte_get_task_type_flow(task_type_id) → etapas ativas do tipo, na ordem (ou ekyte_list_phases(workflow_id) para todas as fases do workflow)
 4. ekyte_list_users → executor_id (UUID)
 5. Chamar este tool
 
@@ -505,6 +507,10 @@ IMPORTANTE: Sempre confirme TODOS os dados com o usuário antes de criar.`,
 
         if (!isMultiPhase && (!params.executor_id || !params.phase_id)) {
           return { content: [{ type: "text" as const, text: "Erro: Forneça 'phases[]' (multi-fase) OU ambos 'executor_id' + 'phase_id' (fase única)." }] };
+        }
+
+        if (params.placement_end_date && !params.placement_start_date) {
+          return { content: [{ type: "text" as const, text: "Erro: 'placement_end_date' exige 'placement_start_date'." }] };
         }
 
         // Build flow[] and determine top-level fields
@@ -563,7 +569,10 @@ IMPORTANTE: Sempre confirme TODOS os dados com o usuário antes de criar.`,
 
         const payload: Record<string, unknown> = {
           title: params.title,
-          quantity: 0,
+          quantity: params.quantity ?? 0,
+          placementStartDate: params.placement_start_date ?? null,
+          placementEndDate: params.placement_end_date ?? null,
+          setPlacementEndDate: Boolean(params.placement_end_date),
           workspaceId: params.workspace_id,
           workspace: { id: params.workspace_id },
           ctcTaskTypeId: params.task_type_id,
@@ -618,6 +627,10 @@ IMPORTANTE: Sempre confirme TODOS os dados com o usuário antes de criar.`,
           `- **Tempo Estimado Total**: ${totalFmt.formatted}`,
           `- **Início**: ${params.phase_start_date}`,
           `- **Entrega**: ${params.phase_due_date}`,
+          params.placement_start_date
+            ? `- **Veiculação**: ${params.placement_start_date}${params.placement_end_date ? ` a ${params.placement_end_date}` : ""}`
+            : "",
+          params.quantity !== undefined ? `- **Quantidade**: ${params.quantity}` : "",
           "",
           `### Fluxo (${flow.length} fase${flow.length > 1 ? "s" : ""}):`,
           ...flow.map((f, i) =>

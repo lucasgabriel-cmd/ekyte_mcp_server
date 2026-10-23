@@ -6,7 +6,7 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { apiGet, companyUrl, companyV2Url, handleApiError } from "../services/ekyte-client.js";
+import { apiGet, companyUrl, companyV2Url, getTokenUserId, handleApiError } from "../services/ekyte-client.js";
 import { TASK_STATUS_LABELS, CHARACTER_LIMIT } from "../constants.js";
 import { ResponseFormat } from "../schemas/common.js";
 import {
@@ -17,6 +17,12 @@ import {
   GetTaskSchema,
   ListPhasesSchema,
   ListTaskFlowPhasesSchema,
+  GetDetailedTaskSchema,
+  GetTaskTypeFlowSchema,
+  GetCurrentUserSchema,
+  type GetDetailedTaskInput,
+  type GetTaskTypeFlowInput,
+  type GetCurrentUserInput,
   type ListWorkspacesInput,
   type ListUsersInput,
   type ListTaskTypesInput,
@@ -189,6 +195,8 @@ Paginação client-side: 50 registros por página. Total típico: 600+ workspace
 👉 PREFIRA usar "search" (busca por nome OU email, case-insensitive) para achar alguém rapidamente. Ex: search="pietro".
 
 Retorna: id (UUID), nome, email.
+
+A lista traz só administradores e editores da empresa (quem pode ser responsável por tarefa). É o equivalente ao list_admin_editors_users do conector oficial do Ekyte.
 
 IMPORTANTE: O ID do usuário é um UUID (ex: "feff4a61-b0a3-483d-a384-172c4b301ee0"), não um número.
 
@@ -712,6 +720,285 @@ Retorna: título, descrição, status, responsável, workspace, tipo, datas, tem
       }
     }
   );
+
+  // -------- Get Detailed Task (task + flow + comments) --------
+  server.registerTool(
+    "ekyte_get_detailed_task",
+    {
+      title: "Ver Tarefa Completa (fluxo, comentários e anexos)",
+      description: `Busca uma tarefa com tudo o que ekyte_get_task não traz: o fluxo de fases (executor, datas e esforço por fase), os comentários (autor, data, texto e anexos), os anexos da descrição, o período de veiculação e a quantidade.
+
+Use quando precisar ler a tarefa inteira antes de agir (ex.: dividir, revisar briefing, achar o link de entrega num comentário).
+
+Para só ver status e datas, ekyte_get_task é mais leve.`,
+      inputSchema: GetDetailedTaskSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (params: GetDetailedTaskInput) => {
+      try {
+        const task = await apiGet<Record<string, any>>(companyV2Url(`ctc-tasks/${params.task_id}`));
+
+        if (!task || !task.id) {
+          return { content: [{ type: "text" as const, text: `Tarefa com ID ${params.task_id} não encontrada.` }] };
+        }
+
+        const flowData = await apiGet<Record<string, any>[]>(companyV2Url(`ctc-tasks/${params.task_id}/flow-phases`));
+        const flow = (Array.isArray(flowData) ? flowData : [])
+          .sort((a, b) => (a.sequential as number) - (b.sequential as number));
+
+        let comments: Record<string, any>[] = [];
+        if (params.include_comments) {
+          const raw = await apiGet<unknown[]>(companyV2Url(`ctc-tasks/${params.task_id}/comments`));
+          // The endpoint sometimes nests the list inside another list.
+          comments = (Array.isArray(raw) ? raw.flat() : []) as Record<string, any>[];
+        }
+
+        const day = (d: unknown) => (typeof d === "string" ? d.split("T")[0] : null);
+        const stripHtml = (html: unknown) =>
+          typeof html === "string"
+            ? html.replace(/<br\s*\/?>/gi, "\n").replace(/<\/(div|p|li)>/gi, "\n").replace(/<[^>]+>/g, "")
+              .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+              .replace(/﻿/g, "").replace(/\n{3,}/g, "\n\n").trim()
+            : "";
+        const formatMinutes = (mins: number): string => {
+          const h = Math.floor(mins / 60);
+          const m = mins % 60;
+          return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}`;
+        };
+        // Ekyte user names often contain "|" (ex.: "Nome | Ferraz Piai&Co"), which breaks markdown tables.
+        const cell = (v: unknown) => String(v ?? "-").replace(/\|/g, "/");
+        const artifactNames = (list: unknown) =>
+          Array.isArray(list) ? list.map((a: any) => ({ id: a.id, name: a.name ?? a.currentArtifactS3?.name ?? "-" })) : [];
+
+        const output = {
+          id: task.id,
+          title: task.title,
+          description: stripHtml(task.description),
+          status: TASK_STATUS_LABELS[task.situation] ?? `Desconhecido (${task.situation})`,
+          status_code: task.situation,
+          workspace: task.workspace?.name,
+          workspace_id: task.workspaceId,
+          task_type: task.ctcTaskType?.name,
+          task_type_id: task.ctcTaskTypeId,
+          current_phase_id: task.phaseId,
+          current_phase: task.phase?.name,
+          executor: task.executor?.userName,
+          executor_id: task.executorId,
+          requester: task.requester?.userName ?? null,
+          created_by: task.createBy?.userName,
+          priority_group: task.priorityGroup,
+          quantity: task.quantity,
+          placement_start_date: day(task.placementStartDate),
+          placement_end_date: day(task.placementEndDate),
+          current_due_date: day(task.currentDueDate),
+          created_at: day(task.creationDate),
+          resolved_at: day(task.resolvedDate),
+          estimated_time: formatMinutes(task.estimatedTime ?? 0),
+          actual_time: formatMinutes(task.actualTime ?? 0),
+          description_artifacts: artifactNames(task.artifacts),
+          flow: flow.map((p) => ({
+            sequential: p.sequential,
+            phase_id: p.phaseId,
+            phase_name: p.phase?.name ?? "-",
+            executor_id: p.executorId,
+            executor_name: p.executor?.userName ?? "-",
+            effort_minutes: p.effort,
+            actual_time_minutes: p.actualTime,
+            phase_start_date: day(p.phaseStartDate),
+            phase_due_date: day(p.phaseDueDate),
+            current: p.phaseId === task.phaseId,
+          })),
+          comments: comments.map((c) => ({
+            id: c.id,
+            author: c.responsible?.userName ?? "-",
+            date: day(c.creation),
+            text: stripHtml(c.description),
+            artifacts: artifactNames(c.artifacts),
+          })),
+        };
+
+        const markdown = [
+          `# Tarefa #${output.id} — ${output.title}`,
+          "",
+          `- **Status**: ${output.status}`,
+          `- **Workspace**: ${output.workspace} (ID: ${output.workspace_id})`,
+          `- **Tipo**: ${output.task_type} (ID: ${output.task_type_id})`,
+          `- **Etapa atual**: ${output.current_phase ?? "-"} (ID: ${output.current_phase_id}) com ${output.executor ?? "-"}`,
+          `- **Criado por**: ${output.created_by ?? "-"} em ${output.created_at ?? "-"}`,
+          `- **Entrega atual**: ${output.current_due_date ?? "-"}`,
+          `- **Veiculação**: ${output.placement_start_date ? `${output.placement_start_date} a ${output.placement_end_date ?? "(sem fim)"}` : "-"}`,
+          `- **Quantidade**: ${output.quantity ?? 0}`,
+          `- **Tempo**: estimado ${output.estimated_time} | real ${output.actual_time}`,
+          "",
+          "## Descrição",
+          output.description || "(vazia)",
+          output.description_artifacts.length
+            ? `\nAnexos da descrição: ${output.description_artifacts.map((a) => `${a.name} (ID ${a.id})`).join(", ")}`
+            : "",
+          "",
+          `## Fluxo (${output.flow.length} fase${output.flow.length === 1 ? "" : "s"})`,
+          "| Seq | Phase ID | Nome | Executor | Estimado | Início | Entrega |",
+          "|-----|----------|------|----------|----------|--------|---------|",
+          ...output.flow.map((p) =>
+            `| ${p.sequential}${p.current ? " ▶" : ""} | ${p.phase_id} | ${cell(p.phase_name)} | ${cell(p.executor_name)} | ${formatMinutes(p.effort_minutes ?? 0)} | ${p.phase_start_date ?? "-"} | ${p.phase_due_date ?? "-"} |`
+          ),
+          "",
+          params.include_comments ? `## Comentários (${output.comments.length})` : "",
+          ...(params.include_comments
+            ? output.comments.map((c) => [
+              `### ${c.author} — ${c.date ?? "-"} (ID ${c.id})`,
+              c.text || "(sem texto)",
+              c.artifacts.length ? `Anexos: ${c.artifacts.map((a) => `${a.name} (ID ${a.id})`).join(", ")}` : "",
+              "",
+            ].filter(Boolean).join("\n"))
+            : []),
+        ].filter((l) => l !== "").join("\n");
+
+        return {
+          content: [{ type: "text" as const, text: formatResponse(output, markdown, params.response_format) }],
+        };
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: handleApiError(error) }] };
+      }
+    }
+  );
+
+  // -------- Get Task Type Flow (phases defined on the task type) --------
+  server.registerTool(
+    "ekyte_get_task_type_flow",
+    {
+      title: "Ver Fluxo de Etapas de um Tipo de Tarefa",
+      description: `Mostra as etapas configuradas num TIPO de tarefa: quais estão ativas, em que ordem e com que esforço e executor padrão.
+
+É a fonte da verdade para montar o phases[] de ekyte_create_task: use as etapas com active=1, na ordem de sequential.
+
+Diferença vs ekyte_list_phases e ekyte_list_task_flow_phases:
+- ekyte_list_phases: todas as fases do WORKFLOW, sem dizer quais o tipo usa.
+- ekyte_get_task_type_flow: as fases que ESTE TIPO usa (ativas ou não).
+- ekyte_list_task_flow_phases: as fases de UMA TAREFA já criada.`,
+      inputSchema: GetTaskTypeFlowSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (params: GetTaskTypeFlowInput) => {
+      try {
+        const taskType = await apiGet<Record<string, any>>(companyV2Url(`task-types/${params.task_type_id}`));
+
+        if (!taskType || !taskType.id) {
+          return { content: [{ type: "text" as const, text: `Tipo de tarefa ${params.task_type_id} não encontrado.` }] };
+        }
+
+        const all = (Array.isArray(taskType.flowPhases) ? taskType.flowPhases : [])
+          .sort((a: any, b: any) => (a.sequential as number) - (b.sequential as number));
+        const phases = params.active_only ? all.filter((p: any) => p.active === 1) : all;
+
+        const output = {
+          task_type_id: taskType.id,
+          task_type_name: taskType.name,
+          workflow_id: taskType.workflowId,
+          active_only: params.active_only,
+          total_phases_in_type: all.length,
+          active_phases: all.filter((p: any) => p.active === 1).length,
+          items: phases.map((p: any) => ({
+            sequential: p.sequential,
+            phase_id: p.phaseId,
+            phase_name: p.phase?.name ?? "-",
+            active: p.active === 1,
+            default_effort_minutes: p.effort,
+            default_executor_id: p.executorId,
+            default_executor_name: p.executor?.userName ?? null,
+          })),
+        };
+
+        const markdown = [
+          `# Fluxo do tipo "${output.task_type_name}" (ID ${output.task_type_id})`,
+          "",
+          `Workflow ${output.workflow_id} · ${output.active_phases} etapa(s) ativa(s) de ${output.total_phases_in_type}`,
+          params.active_only ? "Mostrando só as ativas. Use active_only=false para ver todas." : "",
+          "",
+          "| Seq | Phase ID | Etapa | Ativa | Esforço padrão | Executor padrão |",
+          "|-----|----------|-------|-------|----------------|-----------------|",
+          ...output.items.map((p: any) =>
+            `| ${p.sequential} | ${p.phase_id} | ${String(p.phase_name).replace(/\|/g, "/")} | ${p.active ? "Sim" : "Não"} | ${p.default_effort_minutes ?? 0} min | ${String(p.default_executor_name ?? "-").replace(/\|/g, "/")} |`
+          ),
+        ].filter((l) => l !== "").join("\n");
+
+        return {
+          content: [{ type: "text" as const, text: formatResponse(output, markdown, params.response_format) }],
+        };
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: handleApiError(error) }] };
+      }
+    }
+  );
+
+  // -------- Get Current User (owner of the token) --------
+  server.registerTool(
+    "ekyte_get_current_user",
+    {
+      title: "Ver Usuário Conectado",
+      description: `Mostra quem é o usuário dono do token configurado neste servidor (EKYTE_BEARER_TOKEN).
+
+Use no início de um fluxo para confirmar que a conexão funciona e que as ações de escrita (criar tarefa, comentar, apontar horas) vão sair no nome certo, já que elas sempre executam como esse usuário.
+
+Retorna: id (UUID), nome, email, perfil na empresa e se é editor.`,
+      inputSchema: GetCurrentUserSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async (params: GetCurrentUserInput) => {
+      try {
+        const userId = getTokenUserId();
+        const user = await apiGet<Record<string, any>>(companyUrl(`users/${userId}`));
+
+        if (!user || !user.id) {
+          return { content: [{ type: "text" as const, text: `O token pertence ao usuário ${userId}, mas ele não foi encontrado na empresa.` }] };
+        }
+
+        const profiles: Record<number, string> = { 100: "Administrador", 200: "Editor", 300: "Visualizador" };
+        const output = {
+          id: user.id,
+          name: user.userName,
+          email: user.email,
+          profile_code: user.profileCompany,
+          profile: profiles[user.profileCompany] ?? `Desconhecido (${user.profileCompany})`,
+          can_be_executor: user.profileCompany === 100 || user.profileCompany === 200,
+          last_access: typeof user.lastAccessDate === "string" ? user.lastAccessDate.split("T")[0] : null,
+        };
+
+        const markdown = [
+          "# Usuário conectado ao Ekyte",
+          "",
+          `- **Nome**: ${output.name}`,
+          `- **Email**: ${output.email}`,
+          `- **ID (UUID)**: ${output.id}`,
+          `- **Perfil**: ${output.profile}`,
+          "",
+          "As ações de escrita deste servidor saem no nome deste usuário.",
+        ].join("\n");
+
+        return {
+          content: [{ type: "text" as const, text: formatResponse(output, markdown, params.response_format) }],
+        };
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: handleApiError(error) }] };
+      }
+    }
+  );
+
   // -------- List Projects --------
   server.registerTool(
     "ekyte_list_projects",

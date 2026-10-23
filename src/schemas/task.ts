@@ -57,6 +57,43 @@ export const GetTaskSchema = z.object({
 
 export type GetTaskInput = z.infer<typeof GetTaskSchema>;
 
+// ============ Get Detailed Task ============
+
+export const GetDetailedTaskSchema = z.object({
+  task_id: TaskIdSchema,
+  include_comments: z.boolean().default(true)
+    .describe("Se true (padrão), traz também os comentários da tarefa, com autor, data e anexos."),
+  response_format: z.nativeEnum(ResponseFormat)
+    .default(ResponseFormat.MARKDOWN)
+    .describe("Formato de saída"),
+}).strict();
+
+export type GetDetailedTaskInput = z.infer<typeof GetDetailedTaskSchema>;
+
+// ============ Get Task Type Flow ============
+
+export const GetTaskTypeFlowSchema = z.object({
+  task_type_id: z.number().int().positive()
+    .describe("ID do tipo de tarefa. Use ekyte_list_task_types para descobrir."),
+  active_only: z.boolean().default(true)
+    .describe("Se true (padrão), mostra só as etapas ativas do tipo (active=1), que são as que a tarefa deve usar."),
+  response_format: z.nativeEnum(ResponseFormat)
+    .default(ResponseFormat.MARKDOWN)
+    .describe("Formato de saída"),
+}).strict();
+
+export type GetTaskTypeFlowInput = z.infer<typeof GetTaskTypeFlowSchema>;
+
+// ============ Get Current User ============
+
+export const GetCurrentUserSchema = z.object({
+  response_format: z.nativeEnum(ResponseFormat)
+    .default(ResponseFormat.MARKDOWN)
+    .describe("Formato de saída"),
+}).strict();
+
+export type GetCurrentUserInput = z.infer<typeof GetCurrentUserSchema>;
+
 // ============ Phase Flow Item (used in multi-phase create) ============
 
 export const TaskPhaseFlowItemSchema = z.object({
@@ -109,6 +146,12 @@ export const CreateTaskSchema = z.object({
     .describe("Descrição detalhada da tarefa (opcional)"),
   priority: z.number().int().min(0).max(1000).optional()
     .describe("Prioridade (0-1000). Ex: 100=Baixa, 300=Média, 500=Alta. Opcional."),
+  placement_start_date: DateSchema.optional()
+    .describe("Início do período de veiculação/publicação (AAAA-MM-DD). Opcional."),
+  placement_end_date: DateSchema.optional()
+    .describe("Fim do período de veiculação/publicação (AAAA-MM-DD). Opcional; exige placement_start_date."),
+  quantity: z.number().int().min(0).max(9999).optional()
+    .describe("Quantidade de peças/entregas da tarefa (campo Quantidade do Ekyte). Opcional, padrão 0."),
   phases: z.array(TaskPhaseFlowItemSchema).min(1).optional()
     .describe("MULTI-FASE: lista de fases com executores distintos. Quando fornecido, executor_id/phase_id de cima são IGNORADOS — a tarefa começa na primeira fase da lista. Use para criar tarefas com pessoas diferentes em cada etapa do fluxo."),
 }).strict();
